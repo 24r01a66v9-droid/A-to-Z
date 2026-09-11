@@ -69,6 +69,7 @@ fun DirectOrderDialog(
   var buyerName by remember { mutableStateOf("") }
   var buyerPhone by remember { mutableStateOf("") }
   var deliveryAddress by remember { mutableStateOf("") }
+  var paymentMode by remember { mutableStateOf("QR / UPI") }
   var errorMessage by remember { mutableStateOf<String?>(null) }
 
   val totalPrice = produce.farmPrice * quantity
@@ -348,6 +349,43 @@ fun DirectOrderDialog(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        Text(
+          text = "Payment mode",
+          fontSize = 13.sp,
+          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          listOf("QR / UPI", "Cash").forEach { mode ->
+            OutlinedButton(
+              onClick = { paymentMode = mode },
+              modifier = Modifier
+                .weight(1f)
+                .testTag("payment_mode_${mode.replace(" ", "_").replace("/", "")}"),
+              colors = if (paymentMode == mode) {
+                ButtonDefaults.outlinedButtonColors(
+                  containerColor = DarkGreenContainer,
+                  contentColor = DarkGreenDark
+                )
+              } else {
+                ButtonDefaults.outlinedButtonColors()
+              },
+              border = BorderStroke(
+                1.dp,
+                if (paymentMode == mode) DarkGreenPrimary else Color(0xFFB0BEC5)
+              )
+            ) {
+              Text(mode, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+          }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         // Payment Info pill
         Row(
           verticalAlignment = Alignment.CenterVertically,
@@ -361,7 +399,11 @@ fun DirectOrderDialog(
           )
           Spacer(modifier = Modifier.width(6.dp))
           Text(
-            text = "Payment: Direct Pay on Delivery (Cash or UPI to Farmer)",
+            text = if (paymentMode == "QR / UPI") {
+              "Payment: Scan the farmer QR or use UPI directly"
+            } else {
+              "Payment: Cash directly to the farmer on delivery"
+            },
             fontSize = 12.sp,
             color = EarthBrownDark,
             fontWeight = FontWeight.Medium

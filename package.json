@@ -6,14 +6,21 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "delivery": "node server/index.js",
+    "test:delivery": "node --test server/assignment.test.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "latest",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "express": "latest",
+    "firebase-admin": "latest",
+    "lucide-react": "latest",
+    "mongodb": "latest",
+    "qrcode": "^1.5.4",
     "react": "latest",
     "react-dom": "latest",
-    "lucide-react": "latest"
-  },
-  "devDependencies": {}
+    "vite": "latest",
+    "ws": "latest"
+  }
 }
