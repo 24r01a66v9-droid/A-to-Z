@@ -11,8 +11,10 @@
     "test:delivery": "node --test server/assignment.test.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "latest",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.116.0",
     "@vitejs/plugin-react": "latest",
+    "dotenv": "^16.4.7",
     "express": "latest",
     "firebase-admin": "latest",
     "lucide-react": "latest",
