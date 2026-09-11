@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "start": "npm run build && node server/index.js",
     "preview": "vite preview",
     "delivery": "node server/index.js",
     "test:delivery": "node --test server/assignment.test.js"

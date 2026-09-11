@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { createAssignment, nextCandidate, rankPartners } from './assignment.js';
@@ -10,7 +12,7 @@ import { createSupabaseStore } from './supabase-store.js';
 const app = express();
 const server = http.createServer(app);
 const websocketServer = new WebSocketServer({ server, path: '/ws' });
-const port = Number(process.env.DELIVERY_PORT || 8787);
+const port = Number(process.env.PORT || process.env.DELIVERY_PORT || 8787);
 const radiusKm = Number(process.env.DELIVERY_RADIUS_KM || 15);
 const responseTimeoutMs = Number(process.env.PARTNER_RESPONSE_TIMEOUT_MS || 60000);
 const assignments = new Map();
@@ -26,6 +28,8 @@ const partners = [
 ];
 
 app.use(express.json());
+const publicDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
+app.use(express.static(publicDirectory));
 app.use((request, response, next) => {
   response.setHeader('Access-Control-Allow-Origin', process.env.FRONTEND_ORIGIN || '*');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -98,6 +102,7 @@ async function assignCandidate(assignment) {
 }
 
 app.get('/health', (request, response) => response.json({ ok: true, service: 'farmdirect-delivery', integrations: { maps: Boolean(process.env.GOOGLE_MAPS_API_KEY), firebase: Boolean(process.env.FIREBASE_PROJECT_ID), mongodb: Boolean(process.env.MONGODB_URI) } }));
+app.get('/', (request, response) => response.sendFile(path.join(publicDirectory, 'index.html')));
 app.get('/api/partners', (request, response) => response.json({ partners, radiusKm }));
 
 app.post('/api/orders/:orderId/confirm', async (request, response) => {
