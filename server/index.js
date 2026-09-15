@@ -7,7 +7,10 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { createAssignment, nextCandidate, rankPartners } from './assignment.js';
+import { authConfigured, getAuthenticatedUser, getDeliveryPartnerApplication, getProfile, inviteCustomerCare, listDeliveryPartnerApplications, listEligibleDeliveryPartners, listStaffProfiles, requireDeliveryApplicationAccess, requireProfile, submitDeliveryPartnerApplication, updateDeliveryPartnerState, updateStaffProfile } from './auth.js';
+import { analyzeDemand } from './demand-radar.js';
 import { createMongoStore } from './mongo-store.js';
+import { createPaymentOrder, markDevelopmentPayment, paymentConfigured, verifyPayment } from './payment.js';
 import { createSupabaseStore } from './supabase-store.js';
 
 const app = express();
@@ -106,9 +109,130 @@ async function assignCandidate(assignment) {
   return assignment;
 }
 
-app.get('/health', (request, response) => response.json({ ok: true, service: 'farmdirect-delivery', integrations: { maps: Boolean(process.env.GOOGLE_MAPS_API_KEY), firebase: Boolean(process.env.FIREBASE_PROJECT_ID), mongodb: Boolean(process.env.MONGODB_URI) } }));
+app.get('/health', (request, response) => response.json({ ok: true, service: 'farmdirect-delivery', integrations: { maps: Boolean(process.env.GOOGLE_MAPS_API_KEY), firebase: Boolean(process.env.FIREBASE_PROJECT_ID), mongodb: Boolean(process.env.MONGODB_URI), supabaseAuth: authConfigured() } }));
 app.get('/', (request, response) => response.sendFile(path.join(publicDirectory, 'index.html')));
 app.get('/api/partners', (request, response) => response.json({ partners, radiusKm }));
+
+app.get('/api/me', async (request, response) => {
+  const authentication = await getAuthenticatedUser(request);
+  if (authentication.error) return response.status(authentication.status).json({ error: authentication.error });
+  const profile = await getProfile(authentication.user.id);
+  if (!profile || profile.account_status === 'disabled') return response.status(403).json({ error: 'Your account is disabled or has no profile.' });
+  const identity = { user: authentication.user, profile };
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  response.json({ user: identity.user, profile: identity.profile });
+});
+
+app.get('/api/admin/staff', async (request, response) => {
+  const identity = await requireProfile(request, ['admin']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  try { response.json({ profiles: await listStaffProfiles() }); } catch (error) { response.status(500).json({ error: error.message }); }
+});
+
+app.post('/api/admin/customer-care', async (request, response) => {
+  const identity = await requireProfile(request, ['admin']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  const email = String(request.body.email || '').trim().toLowerCase();
+  const name = String(request.body.name || '').trim();
+  if (!/^\S+@\S+\.\S+$/.test(email) || name.length < 2) return response.status(400).json({ error: 'A valid name and email are required.' });
+  try { response.status(201).json({ profile: await inviteCustomerCare({ email, name, approvedBy: identity.user.id }) }); } catch (error) { response.status(400).json({ error: error.message }); }
+});
+
+app.patch('/api/admin/staff/:userId', async (request, response) => {
+  const identity = await requireProfile(request, ['admin']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  try { response.json({ profile: await updateStaffProfile(request.params.userId, request.body, identity.user.id) }); } catch (error) { response.status(400).json({ error: error.message }); }
+});
+
+app.get('/api/admin/delivery-partners', async (request, response) => {
+  const identity = await requireProfile(request, ['admin']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  try { response.json({ applications: await listDeliveryPartnerApplications() }); } catch (error) { response.status(500).json({ error: error.message }); }
+});
+
+app.patch('/api/admin/delivery-partners/:userId', async (request, response) => {
+  const identity = await requireProfile(request, ['admin']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  try { response.json({ application: await updateDeliveryPartnerState(request.params.userId, request.body, identity.user.id) }); } catch (error) { response.status(400).json({ error: error.message }); }
+});
+
+app.get('/api/delivery-partner/application', async (request, response) => {
+  const identity = await requireDeliveryApplicationAccess(request);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  try { response.json({ application: await getDeliveryPartnerApplication(identity.user.id) }); } catch (error) { response.status(500).json({ error: error.message }); }
+});
+
+app.post('/api/delivery-partner/application', async (request, response) => {
+  const identity = await requireDeliveryApplicationAccess(request);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  try { response.status(201).json({ application: await submitDeliveryPartnerApplication(identity.user.id, request.body) }); } catch (error) { response.status(400).json({ error: error.message }); }
+});
+
+app.patch('/api/delivery-partner/availability', async (request, response) => {
+  const identity = await requireProfile(request, ['delivery_partner']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  const application = await getDeliveryPartnerApplication(identity.user.id);
+  if (!application || application.verification_status !== 'verified' || application.account_status !== 'active') return response.status(403).json({ error: 'Partner approval is required before changing availability.' });
+  const availability = request.body.availability_status;
+  if (!['available', 'busy', 'offline'].includes(availability)) return response.status(400).json({ error: 'Invalid availability status.' });
+  const { data, error } = await (await import('@supabase/supabase-js')).createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }).from('delivery_partner_profiles').update({ availability_status: availability }).eq('user_id', identity.user.id).select().single();
+  if (error) return response.status(400).json({ error: error.message });
+  response.json({ application: data });
+});
+
+app.patch('/api/delivery-partner/location', async (request, response) => {
+  const identity = await requireProfile(request, ['delivery_partner']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  const application = await getDeliveryPartnerApplication(identity.user.id);
+  if (!application || application.verification_status !== 'verified' || application.account_status !== 'active' || !application.location_permission) return response.status(403).json({ error: 'Location permission and partner approval are required.' });
+  const location = request.body.current_location;
+  if (!location || !Number.isFinite(Number(location.lat)) || !Number.isFinite(Number(location.lng))) return response.status(400).json({ error: 'Valid current location is required.' });
+  const client = (await import('@supabase/supabase-js')).createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  const { data, error } = await client.from('delivery_partner_profiles').update({ current_location: { lat: Number(location.lat), lng: Number(location.lng), updatedAt: new Date().toISOString() } }).eq('user_id', identity.user.id).select().single();
+  if (error) return response.status(400).json({ error: error.message });
+  response.json({ application: data });
+});
+
+app.use('/api/assignments', async (request, response, next) => {
+  const identity = await requireProfile(request, ['admin', 'delivery_partner', 'customer_care']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  request.profile = identity.profile;
+  next();
+});
+
+app.use('/api/orders', async (request, response, next) => {
+  const identity = await requireProfile(request, ['admin', 'consumer', 'farmer', 'customer_care']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  request.profile = identity.profile;
+  next();
+});
+
+app.post('/api/demand-radar', async (request, response) => {
+  const identity = await requireProfile(request, ['admin', 'farmer', 'customer_care']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  const result = analyzeDemand({ query: request.body.query, produce: request.body.produce, orders: request.body.orders });
+  response.json(result);
+});
+
+app.post('/api/payments/create', async (request, response) => {
+  const identity = await requireProfile(request, ['admin', 'consumer', 'farmer', 'customer_care']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  try {
+    const payment = await createPaymentOrder({ amount: request.body.amount, receipt: request.body.receipt });
+    response.status(201).json({ ...payment, keyId: process.env.RAZORPAY_KEY_ID || null, providerConfigured: paymentConfigured() });
+  } catch (error) {
+    response.status(503).json({ error: error.message });
+  }
+});
+
+app.post('/api/payments/verify', async (request, response) => {
+  const identity = await requireProfile(request, ['admin', 'consumer', 'farmer', 'customer_care']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
+  const { orderId, paymentId, signature } = request.body;
+  const valid = paymentId?.startsWith('dev_payment_') ? markDevelopmentPayment({ orderId }) : verifyPayment({ orderId, paymentId, signature });
+  if (!valid) return response.status(400).json({ error: 'Payment could not be verified.' });
+  response.json({ verified: true, paymentId });
+});
 
 function normalizePhone(phone) {
   return String(phone || '').replace(/[\s()-]/g, '');
@@ -173,9 +297,12 @@ app.post('/api/uploads', async (request, response) => {
 });
 
 app.post('/api/orders/:orderId/confirm', async (request, response) => {
+  const identity = await requireProfile(request, ['admin', 'consumer', 'farmer', 'customer_care']);
+  if (identity.error) return response.status(identity.status).json({ error: identity.error });
   const order = { ...request.body, id: request.params.orderId, weightKg: Number(request.body.weightKg ?? request.body.quantity ?? 0) };
   if (!order.pickup || !order.dropoff) return response.status(400).json({ error: 'pickup and dropoff coordinates are required' });
-  const assignment = createAssignment({ order, partners, radiusKm });
+  const eligiblePartners = await listEligibleDeliveryPartners();
+  const assignment = createAssignment({ order, partners: eligiblePartners, radiusKm });
   assignment.pickupVerification = { otp: String(Math.floor(100000 + Math.random() * 900000)), verified: false };
   assignment.deliveryVerification = { otp: String(Math.floor(100000 + Math.random() * 900000)), verified: false };
   assignment.payment = { status: 'held', releasedAt: null };
@@ -191,7 +318,12 @@ app.post('/api/assignments/:assignmentId/respond', async (request, response) => 
   const assignment = assignments.get(request.params.assignmentId);
   if (!assignment) return response.status(404).json({ error: 'assignment not found' });
   const { partnerId, response: partnerResponse } = request.body;
+  if (request.profile.role !== 'admin' && request.profile.user_id !== assignment.assignedPartnerId) return response.status(403).json({ error: 'Only the assigned delivery partner can respond.' });
   if (assignment.assignedPartnerId !== partnerId) return response.status(409).json({ error: 'partner is not the current candidate' });
+  if (request.profile.role === 'delivery_partner') {
+    const partnerApplication = await getDeliveryPartnerApplication(request.profile.user_id);
+    if (!partnerApplication || partnerApplication.verification_status !== 'verified' || partnerApplication.account_status !== 'active' || partnerApplication.availability_status !== 'available') return response.status(403).json({ error: 'Partner is not currently eligible for delivery acceptance.' });
+  }
   clearAssignmentTimer(assignment.id);
   if (partnerResponse === 'accept') {
     assignment.status = 'accepted';
@@ -247,6 +379,7 @@ function verifyStep(assignment, step, code, qrToken) {
 app.post('/api/assignments/:assignmentId/pickup/verify', (request, response) => {
   const assignment = assignments.get(request.params.assignmentId);
   if (!assignment) return response.status(404).json({ error: 'assignment not found' });
+  if (request.profile.role !== 'admin' && request.profile.user_id !== assignment.assignedPartnerId) return response.status(403).json({ error: 'Only the assigned delivery partner can verify pickup.' });
   assignment.pickupVerification.qrToken ||= crypto.randomUUID();
   if (!verifyStep(assignment, 'pickupVerification', request.body.otp, request.body.qrToken)) return response.status(401).json({ error: 'invalid pickup OTP or QR token' });
   assignment.status = 'in_transit';
@@ -257,6 +390,7 @@ app.post('/api/assignments/:assignmentId/pickup/verify', (request, response) => 
 app.post('/api/assignments/:assignmentId/delivery/verify', (request, response) => {
   const assignment = assignments.get(request.params.assignmentId);
   if (!assignment) return response.status(404).json({ error: 'assignment not found' });
+  if (request.profile.role !== 'admin' && request.profile.user_id !== assignment.assignedPartnerId) return response.status(403).json({ error: 'Only the assigned delivery partner can verify delivery.' });
   assignment.deliveryVerification.qrToken ||= crypto.randomUUID();
   if (!verifyStep(assignment, 'deliveryVerification', request.body.otp, request.body.qrToken)) return response.status(401).json({ error: 'invalid delivery OTP or QR token' });
   assignment.status = 'delivered';

@@ -20,8 +20,18 @@ The website is a React/Vite frontend. Browser state currently keeps the demo mar
 - **Node.js + Express:** order confirmation, delivery assignment, partner responses, fallback reassignment, OTP/QR verification, payment-release state, and REST APIs.
 - **WebSockets:** live assignment, partner notification, GPS location, ETA, pickup, and delivery events at `/ws`.
 - **Supabase:** preferred production persistence through the server-only service-role client. Orders are stored in `orders`; assignments are stored in `delivery_assignments`.
+- **Supabase Auth + profiles:** email/password authentication is resolved to a database profile. Roles and account status are never trusted from browser state or user-supplied registration fields.
 - **MongoDB:** optional compatibility fallback when Supabase variables are absent.
 - **FastAPI:** optional AI service in `ai_service.py`, exposing `/recommend-vehicle` for vehicle recommendations.
+
+Demand Radar is calculated by the Express service from the submitted inventory and order history at `/api/demand-radar`; it returns ranked demand pressure, evidence, and model metadata. Configure Razorpay for real card/UPI checkout and server-side signature verification:
+
+```text
+RAZORPAY_KEY_ID=your-public-key-id
+RAZORPAY_KEY_SECRET=server-only-secret
+```
+
+The browser creates a payment order through `/api/payments/create`, opens Razorpay Checkout, and the server verifies the returned signature at `/api/payments/verify` before an order is accepted. Never put `RAZORPAY_KEY_SECRET` in a `VITE_*` variable. Development mode uses an explicitly marked local payment stub; production refuses payment creation without Razorpay credentials.
 
 Start the services locally:
 
@@ -44,6 +54,10 @@ Without a key, the service uses a Haversine distance estimate so local developme
 ### Supabase setup
 
 Create these tables in Supabase SQL Editor:
+
+Run [`supabase-auth.sql`](supabase-auth.sql) first. It creates the `profiles` table, enum constraints, the allowlisted public signup trigger, RLS policies, and the explicit first-admin bootstrap placeholder. Replace the placeholder UUID with the Auth user's real UUID after creating that user manually in the Supabase Dashboard.
+
+Run [`delivery-partner.sql`](delivery-partner.sql) after it. It creates the delivery-partner application table, verification fields, operational state, location-permission flag, and RLS policies.
 
 ```sql
 create table public.orders (
@@ -90,6 +104,23 @@ Never expose `SUPABASE_SERVICE_ROLE_KEY`, Firebase credentials, Google Maps serv
 - Use Supabase RLS policies and audit logs for row access; never query production tables directly from an untrusted client.
 
 The current repository includes the working demo flow and adapters. Authentication policies, production payment provider integration, real device GPS permissions, and final Supabase RLS policies should be completed before deployment.
+
+### Authentication and authorization flow
+
+1. The owner creates the first user manually in Supabase Auth, copies that Auth user's UUID, and runs the bootstrap row in `supabase-auth.sql` with `role = 'admin'` and `account_status = 'approved'`. There is no public admin registration path.
+2. Public registration may choose only `consumer`, `farmer`, or `delivery_partner`. The database trigger allowlists those three values and converts every other requested role to `consumer`; `admin` and `customer_care` cannot be created through public signup.
+3. On login, Supabase verifies the password and returns an access token. Express validates that token with Supabase Auth, loads `profiles.user_id`, and requires `role` plus `account_status = 'approved'` before returning `/api/me` or serving protected APIs.
+4. An approved admin uses the Admin control screen to invite Customer Care. The backend uses the Supabase service-role admin API, creates a `customer_care` profile in `pending` status, and records the approving admin UUID. The admin must explicitly approve it before access is granted.
+5. Direct URL entry or manually changing browser state does not grant access: protected Express routes reject missing, invalid, pending, disabled, or incorrectly role-matched profiles. Supabase RLS also limits profile reads and blocks client role mutation.
+6. The admin can disable Customer Care from the staff list. Every subsequent API request checks the current profile status, so the disabled user loses protected access even if an old browser session remains.
+
+### Delivery Partner flow
+
+1. A user selects `Delivery Partner` during public registration. Supabase creates the Auth user and the trigger creates a `delivery_partner` profile with `account_status = pending`.
+2. The partner can access only the onboarding application. They submit name, mobile, email, operating location, service area, vehicle details, government-ID verification fields, and optional location permission. The UI shows **Application Pending Admin Verification** and exposes no delivery acceptance controls.
+3. An Admin reviews the application in the Admin dashboard. **Verify & activate** sets `verification_status = verified`, `account_status = active`, records `approved_by` and `approved_at`, and approves the linked profile. Rejecting sets `verification_status = rejected`, suspends the partner record, and disables the linked profile.
+4. Assignment queries only partners where `verification_status = verified`, `account_status = active`, and `availability_status = available`. Ranking considers service area, pickup distance, destination, active-order count, vehicle capacity, and the configured delivery radius. A partner without permitted current location cannot be distance-ranked.
+5. The acceptance endpoint validates the Supabase bearer token, requires the `delivery_partner` role, checks the authenticated UUID against the assigned partner UUID, and re-checks verified/active/available state. A posted `partnerId` cannot impersonate another partner.
 
 Open the local URL printed by Vite, usually `http://localhost:5173/`.
 

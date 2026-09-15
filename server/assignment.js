@@ -38,8 +38,10 @@ export function scorePartner({ partner, distanceKm, travelTimeMinutes, orderWeig
 export function rankPartners({ order, partners, radiusKm = 15, estimateTravelTime = defaultTravelEstimate }) {
   const weightKg = Math.max(0, Number(order.weightKg) || 0);
   const pickup = order.pickup;
+  const destinationText = `${order.serviceArea || ''} ${order.address || ''}`.toLowerCase();
   return partners
     .filter((partner) => partner.available !== false)
+    .filter((partner) => !partner.serviceArea || !destinationText || partner.serviceArea.toLowerCase().split(',').some((area) => destinationText.includes(area.trim().toLowerCase())))
     .filter((partner) => (Number(partner.capacityKg) || 0) >= weightKg)
     .map((partner) => {
       const distanceKm = haversineKm(pickup, partner.location);
