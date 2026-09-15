@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +19,8 @@ const responseTimeoutMs = Number(process.env.PARTNER_RESPONSE_TIMEOUT_MS || 6000
 const assignments = new Map();
 const orders = new Map();
 const timers = new Map();
+const uploadChallenges = new Map();
+const uploadTokens = new Map();
 const dataStore = createSupabaseStore() || await createMongoStore();
 
 const partners = [
@@ -27,9 +30,11 @@ const partners = [
   { id: 'deccan-truck', name: 'Deccan Farm Truck', vehicle: 'Truck', capacityKg: 5000, rating: 4.5, activeOrders: 4, available: true, averageSpeedKph: 32, location: { lat: 17.48, lng: 78.39 } }
 ];
 
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
 const publicDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
+const uploadDirectory = path.join(publicDirectory, 'uploads');
 app.use(express.static(publicDirectory));
+app.use('/uploads', express.static(uploadDirectory));
 app.use((request, response, next) => {
   response.setHeader('Access-Control-Allow-Origin', process.env.FRONTEND_ORIGIN || '*');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -104,6 +109,68 @@ async function assignCandidate(assignment) {
 app.get('/health', (request, response) => response.json({ ok: true, service: 'farmdirect-delivery', integrations: { maps: Boolean(process.env.GOOGLE_MAPS_API_KEY), firebase: Boolean(process.env.FIREBASE_PROJECT_ID), mongodb: Boolean(process.env.MONGODB_URI) } }));
 app.get('/', (request, response) => response.sendFile(path.join(publicDirectory, 'index.html')));
 app.get('/api/partners', (request, response) => response.json({ partners, radiusKm }));
+
+function normalizePhone(phone) {
+  return String(phone || '').replace(/[\s()-]/g, '');
+}
+
+function hashCode(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+async function sendWhatsAppOtp(phone, otp) {
+  const { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM } = process.env;
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_WHATSAPP_FROM) {
+    if (process.env.NODE_ENV !== 'production' && process.env.ALLOW_DEV_OTP === 'true') return { provider: 'development', devOtp: otp };
+    throw new Error('WhatsApp OTP provider is not configured');
+  }
+  const body = new URLSearchParams({ To: `whatsapp:${phone}`, From: `whatsapp:${TWILIO_WHATSAPP_FROM}`, Body: `FarmDirect verification code: ${otp}. It expires in 10 minutes.` });
+  const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString('base64');
+  const result = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`, { method: 'POST', headers: { Authorization: `Basic ${credentials}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+  if (!result.ok) throw new Error(`WhatsApp provider returned ${result.status}`);
+  return { provider: 'twilio' };
+}
+
+app.post('/api/upload-verification/request', async (request, response) => {
+  const phone = normalizePhone(request.body.phone);
+  if (!/^\+[1-9]\d{7,14}$/.test(phone)) return response.status(400).json({ error: 'Use an international phone number, for example +919876543210.' });
+  const challengeId = crypto.randomUUID();
+  const otp = String(crypto.randomInt(100000, 1000000));
+  try {
+    const delivery = await sendWhatsAppOtp(phone, otp);
+    uploadChallenges.set(challengeId, { phone, codeHash: hashCode(otp), expiresAt: Date.now() + 10 * 60 * 1000, attempts: 0 });
+    response.json({ challengeId, provider: delivery.provider, ...(delivery.devOtp ? { devOtp: delivery.devOtp } : {}) });
+  } catch (error) {
+    response.status(503).json({ error: error.message });
+  }
+});
+
+app.post('/api/upload-verification/verify', (request, response) => {
+  const challenge = uploadChallenges.get(request.body.challengeId);
+  const code = String(request.body.code || '');
+  if (!challenge || challenge.expiresAt < Date.now() || challenge.attempts >= 5) return response.status(401).json({ error: 'This verification request has expired. Request a new code.' });
+  challenge.attempts += 1;
+  if (!/^\d{6}$/.test(code) || hashCode(code) !== challenge.codeHash) return response.status(401).json({ error: 'That WhatsApp code is not correct.' });
+  const verificationToken = crypto.randomUUID();
+  uploadTokens.set(verificationToken, { phone: challenge.phone, expiresAt: Date.now() + 10 * 60 * 1000 });
+  uploadChallenges.delete(request.body.challengeId);
+  response.json({ verificationToken });
+});
+
+app.post('/api/uploads', async (request, response) => {
+  const verification = uploadTokens.get(request.body.verificationToken);
+  if (!verification || verification.expiresAt < Date.now()) return response.status(401).json({ error: 'Verify your WhatsApp number before uploading.' });
+  const match = String(request.body.imageData || '').match(/^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+  if (!match) return response.status(400).json({ error: 'Upload a JPEG, PNG, WEBP, or GIF image.' });
+  const image = Buffer.from(match[2], 'base64');
+  if (image.length > 5 * 1024 * 1024) return response.status(413).json({ error: 'Image must be smaller than 5 MB.' });
+  await fs.mkdir(uploadDirectory, { recursive: true });
+  const extension = match[1].split('/')[1].replace('jpeg', 'jpg');
+  const fileName = `${crypto.randomUUID()}.${extension}`;
+  await fs.writeFile(path.join(uploadDirectory, fileName), image);
+  uploadTokens.delete(request.body.verificationToken);
+  response.status(201).json({ url: `/uploads/${fileName}` });
+});
 
 app.post('/api/orders/:orderId/confirm', async (request, response) => {
   const order = { ...request.body, id: request.params.orderId, weightKg: Number(request.body.weightKg ?? request.body.quantity ?? 0) };

@@ -4,9 +4,9 @@ function PaymentMethodScanner({ onScan, onClose }) {
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowRight, BarChart3, Check, ChevronDown, CircleDollarSign, Clock3,
+  ArrowRight, BarChart3, Check, ChevronDown, CircleDollarSign, CloudRain, Clock3,
   Camera, Leaf, MapPin, Menu, MessageCircle, Minus, PackageCheck, Phone, Plus, Radar, Search, Send, ShoppingBasket,
-  Axe, Clock, KeyRound, LockKeyhole, LogIn, LogOut, Mail, Route, ShieldCheck, Sprout, Star, Store, TrendingDown, Truck, UserRound, X, Zap
+  Axe, Clock, KeyRound, LockKeyhole, LogIn, LogOut, Mail, Mic, MicOff, Route, ShieldCheck, Sprout, Star, Store, TrendingDown, Truck, UserRound, X, Zap
 } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import QRCode from 'qrcode';
@@ -93,6 +93,8 @@ const money = (value) => `₹${value.toLocaleString('en-IN')}`;
 const UPI_ID = import.meta.env.VITE_UPI_ID || 'farmersatoz@upi';
 const paymentAppLink = (method, amount) => method === 'PhonePe' ? `phonepe://pay?pa=${UPI_ID}&pn=Farmers%20A%20to%20Z&am=${amount}&cu=INR` : method === 'Google Pay' ? `tez://upi/pay?pa=${UPI_ID}&pn=Farmers%20A%20to%20Z&am=${amount}&cu=INR` : '';
 const openPaymentApp = (method, amount) => { const link = paymentAppLink(method, amount); if (!link) return; const anchor = document.createElement('a'); anchor.href = link; anchor.target = '_self'; anchor.rel = 'noopener'; document.body.appendChild(anchor); anchor.click(); anchor.remove(); };
+const whatsappLink = (phone, message = '') => `https://wa.me/${phone.replace(/\D/g, '')}${message ? `?text=${encodeURIComponent(message)}` : ''}`;
+const speechRecognition = () => window.SpeechRecognition || window.webkitSpeechRecognition;
 const distanceBetween = (from, to) => { if (!from || !to) return Number.POSITIVE_INFINITY; const radians = (value) => value * Math.PI / 180; const latDelta = radians(to.lat - from.lat); const lngDelta = radians(to.lng - from.lng); const area = Math.sin(latDelta / 2) ** 2 + Math.cos(radians(from.lat)) * Math.cos(radians(to.lat)) * Math.sin(lngDelta / 2) ** 2; return 6371 * 2 * Math.atan2(Math.sqrt(area), Math.sqrt(1 - area)); };
 const load = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
 const LanguageContext = createContext(null);
@@ -128,6 +130,7 @@ function App() {
     const [buyerType, setBuyerType] = useState('Household');
   const [selected, setSelected] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [voiceListingName, setVoiceListingName] = useState('');
   const [currentUser, setCurrentUser] = useState(() => { const storedUser = load('farmdirect-user', null); return storedUser?.role === 'admin' ? null : storedUser; });
   const [showAuth, setShowAuth] = useState(false);
   const [authMode, setAuthMode] = useState('login');
@@ -202,9 +205,9 @@ function App() {
     : [['market', householdLabels[language] || householdLabels.en, Store], ['radar', t('radar'), Radar], ['connect', retailConnectTranslations[language].nav, MessageCircle], ['orders', t('orders'), Truck], ['reviews', 'Reviews', Star]];
   return <div className="app-shell">
     <header className="topbar"><div className="brand" onClick={() => setTab(role === 'delivery' ? 'operations' : role === 'farmer' ? 'farmer' : 'market')}><div className="brand-mark farmer-logo" aria-label="Indian farmer logo"><span role="img" aria-label="Indian farmer">👨🏾‍🌾</span></div><span>Farmers <span>A to Z</span></span></div><nav className="desktop-nav">{navItems.map(([key, label, Icon]) => <button className={tab === key ? 'active' : ''} key={key} onClick={() => key === 'add-listing' ? setShowAdd(true) : setTab(key)}><Icon size={17} />{label}{key === 'orders' && orders.length > 0 && <b className="nav-count">{orders.length}</b>}</button>)}</nav><div className="top-actions"><label className="language-switcher"><span> भाषा / భాష</span><select value={language} onChange={(event) => setLanguage(event.target.value)} aria-label="Choose language"><option value="en">English</option><option value="hi">हिन्दी</option><option value="te">తెలుగు</option><option value="ta">தமிழ்</option><option value="kn">ಕನ್ನಡ</option><option value="ml">മലയാളം</option></select></label><button className="cart-button" onClick={() => requireLogin(() => setTab('cart'))} title="Open cart"><ShoppingBasket size={16} /><span>Cart</span>{cart.length > 0 && <b>{cart.length}</b>}</button><button className={`role-switch ${role}-mode`} onClick={handleRoleChange} aria-label={`Switch to ${role === 'consumer' ? 'farmer' : 'consumer'} mode`}><UserRound size={15} /><span>{role === 'consumer' ? 'Consumer mode' : role === 'farmer' ? 'Farmer mode' : 'Delivery partner'}</span><ChevronDown size={14} /></button>{currentUser ? <button className="account-button" onClick={handleLogout} title="Log out"><LogOut size={15} /> {currentUser.name}</button> : <button className="account-button" onClick={() => { setAuthMode('login'); setShowAuth(true); }}><LogIn size={15} /> {t('login')}</button>}<button className="mobile-menu"><Menu size={20} /></button></div></header>
-    <main>{tab === 'market' && <Marketplace produce={filtered} query={query} setQuery={setQuery} category={category} setCategory={setCategory} buyerType={buyerType} setBuyerType={buyerType} onSelect={handleProduceSelect} onAddToCart={(item) => requireLogin(() => addToCart(item))} />}{tab === 'inputs' && <AgriculturalInputs onBuyInput={(item) => requireLogin(() => addToCart(item))} />}{tab === 'connect' && <RetailConnect />}{tab === 'radar' && <DemandRadar />}{tab === 'calculator' && <Calculator />}{tab === 'orders' && <Orders orders={orders} />}{tab === 'cart' && <Cart items={cart} onCheckout={checkoutCart} />}{tab === 'operations' && <OperationsDashboard orders={orders} onAssign={(id, partner) => setOrders((current) => current.map((order) => order.id === id ? { ...order, partner, status: 'Assigned to delivery partner' } : order))} />}{tab === 'reviews' && <Reviews />} {tab === 'farmer' && <><FarmerHub produce={produce} orders={orders} onAdd={() => setShowAdd(true)} onDelete={(id) => setProduce((current) => current.filter((item) => item.id !== id))} /><FarmerSuggestions produce={produce} /></>}</main>
+    <main>{tab === 'market' && <Marketplace produce={filtered} query={query} setQuery={setQuery} category={category} setCategory={setCategory} buyerType={buyerType} setBuyerType={setBuyerType} onSelect={handleProduceSelect} onAddToCart={(item) => requireLogin(() => addToCart(item))} />}{tab === 'inputs' && <AgriculturalInputs onBuyInput={(item) => requireLogin(() => addToCart(item))} />}{tab === 'connect' && <RetailConnect />}{tab === 'radar' && <DemandRadar />}{tab === 'calculator' && <Calculator />}{tab === 'orders' && <Orders orders={orders} />}{tab === 'cart' && <Cart items={cart} onCheckout={checkoutCart} />}{tab === 'operations' && <OperationsDashboard orders={orders} onAssign={(id, partner) => setOrders((current) => current.map((order) => order.id === id ? { ...order, partner, status: 'Assigned to delivery partner' } : order))} />}{tab === 'reviews' && <Reviews />} {tab === 'farmer' && <><FarmerHub produce={produce} orders={orders} onAdd={() => setShowAdd(true)} onVoiceAdd={(name) => { setShowAdd(true); setVoiceListingName(name); }} onDelete={(id) => setProduce((current) => current.filter((item) => item.id !== id))} /><FarmerSuggestions produce={produce} /></>}</main>
     <div className="mobile-nav">{navItems.map(([key, label, Icon]) => <button className={tab === key ? 'active' : ''} aria-label={label} key={key} onClick={() => key === 'add-listing' ? setShowAdd(true) : setTab(key)}><Icon size={19} /><span>{label}</span></button>)}</div>
-    {selected && <OrderModal item={selected} onClose={() => setSelected(null)} onPlace={placeOrder} />}{showAdd && <AddListing onClose={() => setShowAdd(false)} onAdd={addListing} />}{showAuth && <AuthModal mode={authMode} onModeChange={setAuthMode} onClose={() => setShowAuth(false)} onAuthenticated={handleAuth} />}
+    {selected && <OrderModal item={selected} onClose={() => setSelected(null)} onPlace={placeOrder} />}{showAdd && <AddListing initialName={voiceListingName} onClose={() => { setShowAdd(false); setVoiceListingName(''); }} onAdd={addListing} />}{showAuth && <AuthModal mode={authMode} onModeChange={setAuthMode} onClose={() => setShowAuth(false)} onAuthenticated={handleAuth} />}
   </div>;
 }
 
@@ -212,6 +215,28 @@ function Marketplace({ produce, query, setQuery, category, setCategory, buyerTyp
   const { language, t } = useLanguage();
   const localizedProduce = produce.map((item) => localizeProduce(item, language));
   return <section className="market-page page-enter"><div className="hero-band"><div className="hero-copy"><div className="eyebrow"><span></span> {t('directSource')}</div><h1>{t('goodFood')}<br /><em>{t('fairlyPriced')}</em></h1><p>Meet the farmers behind your food. Buy fresh produce at farm-gate prices, with every rupee accounted for.</p><button className="primary-button" onClick={() => document.querySelector('.listing-section')?.scrollIntoView({ behavior: 'smooth' })}>{t('explore')} <ArrowRight size={17} /></button></div><div className="hero-art"><div className="sun"></div><div className="field field-one"></div><div className="field field-two"></div><span className="hero-label">THIS WEEK'S<br /><strong>FRESH PICK</strong></span><span className="hero-stamp">0%<small>MIDDLEMEN</small></span></div></div><div className="trust-row"><div><Check size={16} /> Prices set by farmers</div><div><Leaf size={16} /> Freshness you can trace</div><div><CircleDollarSign size={16} /> Average savings 38%</div></div><div className="listing-section"><div className="section-heading"><div><div className="eyebrow muted">{t('weeklyHarvest')}</div><h2>{t('findStaple')}</h2></div><span className="result-count">{produce.length} listings near you</span></div><div className="buyer-switch"><span>Buying for</span>{buyerTypes.map((type) => <button key={type} className={buyerType === type ? 'selected' : ''} onClick={() => setBuyerType(type)}>{type}</button>)}</div><div className="toolbar"><label className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('searchProduce')} /></label><div className="category-row">{categories.map((item) => <button key={item} className={category === item ? 'selected' : ''} onClick={() => setCategory(item)}>{item}</button>)}</div></div><div className="produce-grid">{localizedProduce.map((item) => <ProduceCard key={item.id} item={item} onSelect={onSelect} onAddToCart={onAddToCart} />)}</div>{produce.length === 0 && <div className="empty-state">No harvests match that search. Try another crop or place.</div>}</div></section>;
+  return <section className="market-page page-enter"><div className="hero-band"><div className="hero-copy"><div className="eyebrow"><span></span> {t('directSource')}</div><h1>{t('goodFood')}<br /><em>{t('fairlyPriced')}</em></h1><p>Meet the farmers behind your food. Buy fresh produce at farm-gate prices, with every rupee accounted for.</p><button className="primary-button" onClick={() => document.querySelector('.listing-section')?.scrollIntoView({ behavior: 'smooth' })}>{t('explore')} <ArrowRight size={17} /></button></div><div className="hero-art"><div className="sun"></div><div className="field field-one"></div><div className="field field-two"></div><span className="hero-label">THIS WEEK'S<br /><strong>FRESH PICK</strong></span><span className="hero-stamp">0%<small>MIDDLEMEN</small></span></div></div><div className="trust-row"><div><Check size={16} /> Prices set by farmers</div><div><Leaf size={16} /> Freshness you can trace</div><div><CircleDollarSign size={16} /> Average savings 38%</div></div><div className="listing-section"><div className="section-heading"><div><div className="eyebrow muted">{t('weeklyHarvest')}</div><h2>{t('findStaple')}</h2></div><span className="result-count">{produce.length} listings near you</span></div><div className="buyer-switch"><span>Buying for</span>{buyerTypes.map((type) => <button key={type} className={buyerType === type ? 'selected' : ''} onClick={() => setBuyerType(type)}>{type}</button>)}</div><div className="toolbar"><label className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('searchProduce')} /><VoiceInputButton onTranscript={(text) => setQuery((current) => `${current} ${text}`.trim())} /></label><div className="category-row">{categories.map((item) => <button key={item} className={category === item ? 'selected' : ''} onClick={() => setCategory(item)}>{item}</button>)}</div></div><div className="produce-grid">{localizedProduce.map((item) => <ProduceCard key={item.id} item={item} onSelect={onSelect} onAddToCart={onAddToCart} />)}</div>{produce.length === 0 && <div className="empty-state">No harvests match that search. Try another crop or place.</div>}</div></section>;
+}
+
+function VoiceInputButton({ onTranscript, language = 'en-IN' }) {
+  const recognitionRef = useRef(null);
+  const [listening, setListening] = useState(false);
+  const supported = Boolean(speechRecognition());
+  const toggle = () => {
+    if (!supported) return;
+    if (listening) { recognitionRef.current?.stop(); return; }
+    const Recognition = speechRecognition();
+    const recognition = new Recognition();
+    recognition.lang = language;
+    recognition.interimResults = false;
+    recognition.onresult = (event) => onTranscript(event.results[0][0].transcript);
+    recognition.onend = () => setListening(false);
+    recognition.onerror = () => setListening(false);
+    recognitionRef.current = recognition;
+    setListening(true);
+    recognition.start();
+  };
+  return <button type="button" className={`voice-button ${listening ? 'listening' : ''}`} onClick={toggle} disabled={!supported} title={supported ? (listening ? 'Stop listening' : 'Speak') : 'Voice input is not supported in this browser'} aria-label={supported ? (listening ? 'Stop listening' : 'Speak') : 'Voice input unavailable'}>{listening ? <MicOff size={16} /> : <Mic size={16} />}</button>;
 }
 
 function ProduceCard({ item, onSelect, onAddToCart }) { const savings = Math.round(((item.middlemanPrice - item.farmPrice) / item.middlemanPrice) * 100); const image = item.photo || produceImages[item.id]; return <article className="produce-card"><div className={`produce-image ${item.color}`} onClick={() => onSelect(item)}>{image ? <img className="produce-photo" src={image} alt={item.name} /> : <div className="produce-illustration"><span></span><span></span><span></span></div>}<span className="category-label">{item.category}</span>{item.organic && <span className="organic-label"><Leaf size={12} /> ORGANIC</span>}</div><div className="produce-body"><div className="produce-title"><div><h3>{item.name}</h3><p>{item.farm}</p></div><span className="savings-pill">-{savings}%</span></div><div className="location"><MapPin size={13} /> {item.location}</div><div className="price-line"><div><strong>{money(item.farmPrice)}</strong><span> / {item.unitLabel || item.unit}</span><del>{money(item.middlemanPrice)}</del></div><button className="buy-button" disabled={item.quantity <= 0} onClick={() => onAddToCart(item)}>{item.quantity > 0 ? 'Add to cart' : 'Sold out'} <ShoppingBasket size={15} /></button></div></div></article>; }
@@ -224,6 +249,7 @@ function RetailConnect() {
   const [sentFarmer, setSentFarmer] = useState('');
   const farmers = seedProduce.slice(0, 4);
   const sendMessage = (event) => { event.preventDefault(); if (!message.trim() || !selectedFarmer) return; setSentFarmer(selectedFarmer.farmer); setMessage(''); };
+  const selectedPhone = selectedFarmer ? (selectedFarmer.id === 1 ? '+919876543210' : '+919812345678') : '';
   return <section className="connect-page page-enter">
     <div className="connect-heading"><div><div className="eyebrow"><span></span> {text.kicker}</div><h1>{text.title} <em>{text.titleAccent}</em></h1><p>{text.intro}</p></div><div className="connect-status"><span></span> {text.status}</div></div>
     <div className="connect-grid"><div className="farmer-directory"><div className="directory-top"><div><span className="panel-kicker">{text.directory}</span><h2>{text.ready}</h2></div><span>{farmers.length} {text.active}</span></div>{farmers.map((farmer) => <article className={`farmer-card ${selectedFarmer?.id === farmer.id ? 'selected' : ''}`} key={farmer.id}><div className={`farmer-avatar ${farmer.color}`}><Sprout size={23} /></div><div className="farmer-card-main"><div><h3>{farmer.farmer}</h3><p>{farmer.farm}</p></div><span className="farmer-location"><MapPin size={12} /> {farmer.location.split(',')[0]}</span><div className="supply-line"><strong>{farmer.name}</strong><span>{farmer.quantity} {farmer.unit} {text.available}</span></div></div><div className="farmer-card-actions"><button className="connect-button" onClick={() => setSelectedFarmer(farmer)}><MessageCircle size={15} /> {text.message}</button><a className="phone-button" href={`tel:${farmer.id === 1 ? '+919876543210' : '+919812345678'}`} title={`${text.call} ${farmer.farmer}`}><Phone size={15} /></a></div></article>)}</div><aside className="compose-panel"><div className="panel-kicker">{text.conversation}</div><h2>{selectedFarmer ? `${text.message} ${selectedFarmer.farmer}` : text.start}</h2>{selectedFarmer ? <><div className="compose-recipient"><div className={`farmer-avatar small ${selectedFarmer.color}`}><Sprout size={18} /></div><div><strong>{selectedFarmer.farm}</strong><span>{selectedFarmer.name} · {selectedFarmer.quantity} {selectedFarmer.unit} {text.available}</span></div></div><form onSubmit={sendMessage}><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder={text.ask} rows="5" /><button className="primary-button full-button" type="submit" disabled={!message.trim()}><Send size={16} /> {text.send}</button></form>{sentFarmer === selectedFarmer.farmer && <p className="sent-confirmation"><Check size={15} /> {text.sent} {selectedFarmer.farmer}</p>}</> : <div className="compose-empty"><MessageCircle size={32} /><p>{text.select}</p></div>}</aside></div>
@@ -237,6 +263,8 @@ function DemandRadar() {
   const [farmArea, setFarmArea] = useState('Hyderabad');
   const [weather, setWeather] = useState('Sunny');
   const [waterMethod, setWaterMethod] = useState('Drip irrigation');
+  const [supportTopic, setSupportTopic] = useState('rain damage');
+  const [supportSent, setSupportSent] = useState(false);
   const areaProfiles = {
     Hyderabad: { soil: 'Red loam', note: 'Watch moisture loss in exposed fields.' },
     Warangal: { soil: 'Red sandy loam', note: 'Protect topsoil after heavy rain.' },
@@ -262,6 +290,14 @@ function DemandRadar() {
   const hasMatch = !normalizedQuery || Boolean(cities.find(matchesCity));
   const searchedProduce = normalizedQuery || matchingCity.produce;
   const selectedArea = areaProfiles[farmArea];
+  const rainProfiles = {
+    Hyderabad: { probability: 68, amount: '12-18 mm', window: '4 PM - 8 PM', risk: 'Moderate' },
+    Warangal: { probability: 76, amount: '18-24 mm', window: '3 PM - 7 PM', risk: 'High' },
+    Nizamabad: { probability: 54, amount: '8-14 mm', window: '5 PM - 9 PM', risk: 'Watch' },
+    Karimnagar: { probability: 61, amount: '10-16 mm', window: '4 PM - 8 PM', risk: 'Moderate' }
+  };
+  const rainProfile = rainProfiles[farmArea];
+  const rainProbability = weather === 'Rainy' ? Math.max(rainProfile.probability, 82) : weather === 'Heatwave' ? Math.max(8, rainProfile.probability - 35) : weather === 'Cloudy' ? Math.min(84, rainProfile.probability + 8) : rainProfile.probability;
   const harvestAdvice = weather === 'Rainy' ? 'Harvest in the next dry morning and keep produce off wet soil.' : weather === 'Heatwave' ? 'Harvest at dawn, then move the crop into shade within 30 minutes.' : weather === 'Cloudy' ? 'Harvest when leaves are dry and leave extra airflow around packed produce.' : 'Harvest early morning or after sunset to protect freshness.';
   const waterAdvice = waterMethod === 'Drip irrigation' ? 'Run short, frequent cycles and check moisture 5 cm below the surface.' : waterMethod === 'Sprinkler' ? 'Water before 9 AM and avoid wetting leaves overnight.' : waterMethod === 'Flood irrigation' ? 'Reduce standing water and switch to smaller measured furrows where possible.' : 'Use stored rainwater for the next cycle and keep a reserve for dry days.';
   return <section className="radar-page page-enter">
@@ -277,6 +313,25 @@ function DemandRadar() {
         </div>
       </div>
       <aside className="radar-insights"><div className="insight-header"><div><span className="panel-kicker">{t('aiReadout')}</span><h2>{t('growNext')}</h2></div><Radar size={20} /></div><div className={`radar-callout ${hasMatch ? '' : 'no-signal'}`}><div className="signal-icon"><TrendingDown size={18} /></div><div><strong>{hasMatch ? `Move ${searchedProduce} toward ${matchingCity.name}` : t('noSignal')}</strong><p>{hasMatch ? `${matchingCity.state} demand is outpacing nearby supply this week.` : t('tryTracked')}</p></div><b>{hasMatch ? matchingCity.change : '?'}</b></div><div className="city-list">{cities.map((city) => <div className={`city-row ${city.name === matchingCity.name && hasMatch ? 'selected' : ''}`} key={city.name}><span className={`city-dot ${city.level}`}></span><div><strong>{city.name}</strong><small>{city.state} · {city.crop}</small></div><b>{city.change}</b><ArrowRight size={14} /></div>)}</div><div className="radar-footer"><MapPin size={15} /> {cities.length} state markets tracked <span>•</span> {cities.length * 7} signals analyzed</div></aside>
+    </div>
+    <div className="radar-tools">
+      <article className="rain-predictor">
+        <div className="tool-card-heading"><div><span className="panel-kicker">FIELD WEATHER</span><h2>Rain predictor</h2></div><CloudRain size={22} /></div>
+        <div className="rain-controls">
+          <label><span>Farm area</span><select value={farmArea} onChange={(event) => setFarmArea(event.target.value)}>{Object.keys(areaProfiles).map((area) => <option key={area}>{area}</option>)}</select></label>
+          <label><span>Today feels</span><select value={weather} onChange={(event) => setWeather(event.target.value)}><option>Sunny</option><option>Cloudy</option><option>Rainy</option><option>Heatwave</option></select></label>
+        </div>
+        <div className="rain-score"><div><small>RAIN CHANCE TODAY</small><strong>{rainProbability}%</strong></div><div className="rain-meter"><span style={{ width: `${rainProbability}%` }}></span></div><b>{rainProfile.risk} risk</b></div>
+        <div className="rain-details"><span><b>Expected</b>{rainProfile.amount}</span><span><b>Likely window</b>{rainProfile.window}</span><span><b>Soil</b>{selectedArea.soil}</span></div>
+        <p className="tool-advice"><strong>Plan:</strong> {harvestAdvice} {waterAdvice}</p>
+      </article>
+      <article className="support-panel">
+        <div className="tool-card-heading"><div><span className="panel-kicker">FARMER CARE DESK</span><h2>Need a hand?</h2></div><MessageCircle size={22} /></div>
+        <p>Talk to a real FarmDirect support partner about weather damage, orders, or delivery.</p>
+        <label className="support-topic"><span>What can we help with?</span><select value={supportTopic} onChange={(event) => { setSupportTopic(event.target.value); setSupportSent(false); }}><option value="rain damage">Rain damage</option><option value="an order">An order</option><option value="selling produce">Selling produce</option></select></label>
+        <div className="support-actions"><a className="whatsapp-cta" href={whatsappLink('+919876543210', `Hello, I need help with ${supportTopic}. I am farming in ${farmArea}.`)} target="_blank" rel="noreferrer" aria-label="Message farmer support on WhatsApp"><MessageCircle size={15} /> WhatsApp</a><a className="support-icon-link" href="tel:+919876543210" title="Call farmer support" aria-label="Call farmer support"><Phone size={16} /></a><a className="support-icon-link" href="mailto:support@farmersatoz.in?subject=FarmDirect%20support" title="Email farmer support" aria-label="Email farmer support"><Mail size={16} /></a></div>
+        <button className="support-confirm" type="button" onClick={() => setSupportSent(true)}>{supportSent ? 'Support request noted' : 'I need a callback'}</button>
+      </article>
     </div>
   </section>;
 }
@@ -385,12 +440,52 @@ function OrderModal({ item, onClose, onPlace }) { const [quantity, setQuantity] 
 function AddListingLegacy({ onClose, onAdd }) { const [form, setForm] = useState({ name: '', category: 'Vegetables', farmPrice: '', unit: 'kg', quantity: '', farmer: 'Your name', farm: 'Your farm', location: 'Your location', organic: true, harvest: 'Freshly harvested', description: 'Fresh produce, grown with care.' }); const update = (key, value) => setForm((current) => ({ ...current, [key]: value })); const submit = (event) => { event.preventDefault(); onAdd({ ...form, farmPrice: Number(form.farmPrice), middlemanPrice: Number(form.farmPrice) * 1.7, quantity: Number(form.quantity) }); }; return <div className="modal-backdrop"><form className="modal add-modal" onSubmit={submit}><button type="button" className="close-button" onClick={onClose}><X size={19} /></button><div className="eyebrow"><span></span> NEW HARVEST</div><h2>List your produce</h2><p className="modal-description">Put a fair price on what you grow and let the right buyers find you.</p><div className="form-grid"><label className="field wide"><span>Produce name</span><input required value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="e.g. Red Lady Papaya" /></label><label className="field"><span>Category</span><select value={form.category} onChange={(event) => update('category', event.target.value)}>{categories.slice(1).map((item) => <option key={item}>{item}</option>)}</select></label><label className="field"><span>Unit</span><select value={form.unit} onChange={(event) => update('unit', event.target.value)}><option>kg</option><option>dozen</option><option>litre</option><option>crate</option></select></label><label className="field"><span>Farm price (₹)</span><input required type="number" min="1" value={form.farmPrice} onChange={(event) => update('farmPrice', event.target.value)} /></label><label className="field"><span>Quantity available</span><input required type="number" min="1" value={form.quantity} onChange={(event) => update('quantity', event.target.value)} /></label><label className="field wide"><span>Farm name</span><input value={form.farm} onChange={(event) => update('farm', event.target.value)} /></label><label className="field wide"><span>Location</span><input value={form.location} onChange={(event) => update('location', event.target.value)} /></label></div><button className="primary-button full-button" type="submit"><Sprout size={17} /> Publish listing</button></form></div>; }
 
 function AddListing({ onClose, onAdd }) {
-  const [form, setForm] = useState({ name: '', category: 'Vegetables', farmPrice: '', middlemanPrice: '', unit: 'kg', quantity: '', farmer: '', farm: '', location: '', organic: true, productionMethod: 'Organic', harvest: '', description: '', photo: '' });
+  const [form, setForm] = useState({ name: '', category: 'Vegetables', farmPrice: '', middlemanPrice: '', unit: 'kg', quantity: '', farmer: '', farmerPhone: '', farm: '', location: '', organic: true, productionMethod: 'Organic', harvest: '', description: '', photo: '' });
+  const [verification, setVerification] = useState(null);
+  const [otp, setOtp] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   const capturePhoto = (event) => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => update('photo', reader.result); reader.readAsDataURL(file); };
+  const apiUrl = import.meta.env.VITE_DELIVERY_API_URL || 'http://localhost:8787';
+  const publish = async (photo = form.photo, verificationToken = verification?.verificationToken) => {
+    setBusy(true); setError('');
+    try {
+      let uploadedPhoto = photo;
+      if (photo) {
+        const uploadResponse = await fetch(`${apiUrl}/api/uploads`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageData: photo, verificationToken }) });
+        const uploadResult = await uploadResponse.json();
+        if (!uploadResponse.ok) throw new Error(uploadResult.error || 'Image upload failed.');
+        uploadedPhoto = `${apiUrl}${uploadResult.url}`;
+      }
+      onAdd({ ...form, photo: uploadedPhoto, farmPrice: Number(form.farmPrice), middlemanPrice: Number(form.middlemanPrice), quantity: Number(form.quantity), description: form.description || 'Fresh produce, grown with care.' });
+    } catch (uploadError) { setError(uploadError.message); } finally { setBusy(false); }
+  };
+  const requestVerification = async () => {
+    setBusy(true); setError('');
+    try {
+      const response = await fetch(`${apiUrl}/api/upload-verification/request`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: form.farmerPhone }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not send WhatsApp code.');
+      setVerification(result);
+      if (result.devOtp) setOtp(result.devOtp);
+    } catch (requestError) { setError(requestError.message); } finally { setBusy(false); }
+  };
+  const verifyAndPublish = async () => {
+    setBusy(true); setError('');
+    try {
+      const response = await fetch(`${apiUrl}/api/upload-verification/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challengeId: verification.challengeId, code: otp }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Verification failed.');
+      setVerification({ ...verification, verificationToken: result.verificationToken });
+      await publish(form.photo, result.verificationToken);
+    } catch (verifyError) { setError(verifyError.message); setBusy(false); }
+  };
   const submit = (event) => {
     event.preventDefault();
-    onAdd({ ...form, farmPrice: Number(form.farmPrice), middlemanPrice: Number(form.middlemanPrice), quantity: Number(form.quantity), description: form.description || 'Fresh produce, grown with care.' });
+    if (form.photo && !verification) { void requestVerification(); return; }
+    if (form.photo && !verification.verificationToken) return;
+    void publish();
   };
   return <div className="modal-backdrop"><form className="modal add-modal detailed-form" onSubmit={submit}>
     <button type="button" className="close-button" onClick={onClose}><X size={19} /></button>
@@ -413,13 +508,17 @@ function AddListing({ onClose, onAdd }) {
     <div className="form-section-title"><MapPin size={16} /> Farm details</div>
     <div className="form-grid">
       <label className="field"><span>Farmer name</span><input required value={form.farmer} onChange={(event) => update('farmer', event.target.value)} placeholder="Your full name" /></label>
+      <label className="field"><span>WhatsApp number</span><input required type="tel" value={form.farmerPhone} onChange={(event) => update('farmerPhone', event.target.value)} placeholder="+91 98765 43210" /></label>
       <label className="field"><span>Farm name</span><input required value={form.farm} onChange={(event) => update('farm', event.target.value)} placeholder="Your farm or co-op" /></label>
       <label className="field wide"><span>Farm location</span><input required value={form.location} onChange={(event) => update('location', event.target.value)} placeholder="Village, district, state" /></label>
       <label className="field wide"><span>Harvest note</span><input value={form.harvest} onChange={(event) => update('harvest', event.target.value)} placeholder="Harvested today, sun-dried last week..." /></label>
       <label className="field wide"><span>Short description</span><textarea rows="3" value={form.description} onChange={(event) => update('description', event.target.value)} placeholder="Tell buyers how it is grown or what makes it special." /></label>
       <label className="field wide photo-field"><span>Product photo</span><span className="camera-input"><Camera size={16} /><b>{form.photo ? 'Change photo' : 'Add a photo'}</b><small>{form.photo ? 'Tap to choose a different image' : 'Upload from your device or take a farm photo'}</small><input type="file" accept="image/*" capture="environment" onChange={capturePhoto} /></span>{form.photo && <img className="listing-preview" src={form.photo} alt="Harvest preview" />}</label>
     </div>
-    <button className="primary-button full-button" type="submit"><Sprout size={17} /> Publish listing</button>
+    {error && <p className="auth-error">{error}</p>}
+    {verification && !verification.verificationToken && <div className="upload-verification"><strong><MessageCircle size={15} /> WhatsApp verification</strong><span>Enter the 6-digit code sent to {form.farmerPhone}.</span><input inputMode="numeric" pattern="[0-9]{6}" maxLength="6" value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="000000" /><button className="secondary-button" type="button" disabled={busy || otp.length !== 6} onClick={verifyAndPublish}>{busy ? 'Verifying...' : 'Verify & publish'}</button></div>}
+    {!verification?.verificationToken && verification?.devOtp && <p className="auth-success">Development mode: code filled automatically.</p>}
+    {!verification && <button className="primary-button full-button" type="submit" disabled={busy}><Sprout size={17} /> {busy ? 'Sending code...' : form.photo ? 'Verify WhatsApp & publish' : 'Publish listing'}</button>}
   </form></div>;
 }
 
@@ -514,4 +613,8 @@ function PaymentScannerHost() {
   return <UpiQrModal method={qrPayment.method} amount={qrPayment.amount} onClose={() => setQrPayment(null)} onScan={() => { setQrPayment(null); setScanning(true); }} onOpenApp={() => { openPaymentApp(qrPayment.method, qrPayment.amount); setQrPayment(null); }} />;
 }
 
-createRoot(document.getElementById('root')).render(<><LanguageProvider><App /></LanguageProvider><PaymentScannerHost /></>);
+function WhatsAppSupport() {
+  return <a className="whatsapp-support" href={whatsappLink('+919876543210', 'Hello, I am a farmer and need help with Farmers A to Z.')} target="_blank" rel="noreferrer" title="Chat with Farmers A to Z on WhatsApp"><MessageCircle size={18} /><span>WhatsApp help</span></a>;
+}
+
+createRoot(document.getElementById('root')).render(<><LanguageProvider><App /></LanguageProvider><PaymentScannerHost /><WhatsAppSupport /></>);
